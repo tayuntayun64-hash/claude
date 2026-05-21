@@ -736,7 +736,7 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         ctx.user_data.clear()
         ctx.user_data["generating"] = True
         await query.message.reply_text(
-            "🖼️ *Langkah 1/4* — Kirim gambar karakter.\n\n"
+            "🖼️ *Langkah 1/2* — Kirim gambar karakter.\n\n"
             "💡 *Tips penting:*\n"
             "• Kirim sebagai *file/dokumen* (bukan foto langsung) agar kualitas tidak turun\n"
             "• Gunakan foto wajah jelas, pencahayaan bagus\n"
@@ -821,7 +821,7 @@ async def got_image(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.user_data["step"]      = "wait_video"
     ctx.user_data["generating"] = True
     await update.message.reply_text(
-        "🎥 *Langkah 2/4* — Kirim video referensi gerak.\n\n"
+        "🎥 *Langkah 2/2* — Kirim video referensi gerak.\n\n"
         "_Tips: Video MP4 maksimal 30 detik, gerakan jelas_",
         parse_mode="Markdown"
     )
@@ -836,15 +836,20 @@ async def got_video(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     ctx.user_data["video_url"] = get_file_url(TELEGRAM_TOKEN, video.file_id)
-    ctx.user_data["step"]      = "wait_prompt"
-
-    from telegram import ReplyKeyboardMarkup as RKM
-    keyboard = [[p] for p in PRESETS.keys()] + [["✏️ Tulis Sendiri"], ["⏭️ Skip"]]
-    await update.message.reply_text(
-        "✏️ *Langkah 3/4* — Pilih preset prompt atau tulis sendiri:",
-        parse_mode="Markdown",
-        reply_markup=RKM(keyboard, resize_keyboard=True, one_time_keyboard=True)
+    # Auto-set prompt, CFG, dan resolusi — langsung generate tanpa pilih manual
+    ctx.user_data["prompt"]  = (
+        "Foto potret DSLR sangat realistis, ultra high resolution, "
+        "diambil dengan kamera DSLR profesional dan lensa potret 85mm, "
+        "aperture f/2.8, pencahayaan malam natural dengan high dynamic range"
     )
+    ctx.user_data["cfg"]     = 0.4
+    ctx.user_data["resolusi"] = "1080"
+    await update.message.reply_text(
+        "⏳ *Gambar & video diterima!* Sedang memproses...",
+        parse_mode="Markdown",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    await do_generate(update, ctx)
 
 async def got_prompt(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not ctx.user_data.get("generating") or ctx.user_data.get("step") != "wait_prompt":
