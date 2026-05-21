@@ -1,9 +1,10 @@
+import asyncio
 import time
 import json
 import os
 import requests
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
@@ -977,6 +978,11 @@ async def do_generate(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"⚙️ CFG Scale: {cfg}",
             f"🎞 Resolusi : {resolusi}p",
         ], user=update.effective_user)
+        # Mulai background polling — log hasil ke channel tanpa perlu user klik
+        asyncio.create_task(_auto_poll_task(
+            ctx.application, task_id, uid, api_key, resolusi,
+            update.effective_user.username or update.effective_user.first_name
+        ))
 
         refresh_kb = InlineKeyboardMarkup([[
             InlineKeyboardButton("🔄 Cek Progress", callback_data=f"cekprogress_{task_id}")
@@ -1129,6 +1135,30 @@ async def text_router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 parse_mode="Markdown"
             )
         else:
+            # Catat kegagalan kode aktivasi
+            ACTIVATION_FAIL_FILE = "activation_fail_log.json"
+            fail_log  = load_json(ACTIVATION_FAIL_FILE, {})
+            uid_str   = str(uid)
+            now_ts    = datetime.now().timestamp()
+            entry     = fail_log.get(uid_str, {"count": 0, "last_try": ""})
+            last_try  = entry.get("last_try", "")
+            if last_try:
+                try:
+                    last_ts = datetime.fromisoformat(last_try).timestamp()
+                    if now_ts - last_ts > 3600:
+                        entry["count"] = 0
+                except Exception:
+                    entry["count"] = 0
+            entry["count"]    = entry.get("count", 0) + 1
+            entry["last_try"] = datetime.now().isoformat()
+            fail_log[uid_str] = entry
+            save_json(ACTIVATION_FAIL_FILE, fail_log)
+            fail_count = entry["count"]
+            if fail_count >= 3:
+                await audit_event(ctx, "⚠️ Kode Aktivasi Salah Berulang", [
+                    f"🔢 Percobaan gagal: {fail_count}x",
+                    f"🔑 Kode terakhir dicoba: {text.upper()[:20]}...",
+                ], user=update.effective_user)
             # Jangan pop state — user bisa coba lagi
             await update.message.reply_text(
                 "❌ *Kode tidak valid atau sudah digunakan.*\n\n"
@@ -1290,8 +1320,51 @@ async def _do_genkey(message, durasi: str):
         parse_mode="Markdown"
     )
 
+# ──────────────────────────────────────────────────────────────────────────
+#  STARTUP / SHUTDOWN + LAPORAN HARIAN
+# ──────────────────────────────────────────────────────────────────────────
+
+async def on_startup(app):
+    if not HISTORY_CHANNEL_ID:
+        return
+    try:
+        await app.bot.send_message(
+            chat_id=HISTORY_CHANNEL_ID,
+            text=f"🟢 Motion Control Bot aktif — {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}"
+        )
+    except Exception as e:
+        log.warning("startup notif gagal: %s", e)
+
+async def on_shutdown(app):
+    if not HISTORY_CHANNEL_ID:
+        return
+    try:
+        await app.bot.send_message(
+            chat_id=HISTORY_CHANNEL_ID,
+            text=f"🔴 Motion Control Bot berhenti — {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}"
+        )
+    except Exception:
+        pass
+
+
+async def kirim_laporan_harian(context: ContextTypes.DEFAULT_TYPE):
+    # NOTE: Fitur ini butuh: pip install python-telegram-bot[job-queue]
+    if not HISTORY_CHANNEL_ID:
+        return
+    kemarin = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    laporan = get_laporan(kemarin)
+    try:
+        await context.bot.send_message(
+            chat_id=HISTORY_CHANNEL_ID,
+            text=f"📊 LAPORAN HARIAN — {kemarin}\n\n{laporan}"
+        )
+    except Exception as e:
+        log.warning("Gagal kirim laporan harian: %s", e)
+
+
 def main():
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    # NOTE: job_queue (run_daily) butuh: pip install python-telegram-bot[job-queue]
+    app = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(on_startup).post_stop(on_shutdown).build()
 
     app.add_handler(CommandHandler("start",   cmd_start))
     app.add_handler(CommandHandler("cancel",  cmd_cancel))
@@ -1306,6 +1379,16 @@ def main():
 
     # Handler teks — semua teks non-command masuk ke sini
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, universal_text_handler))
+
+    if HISTORY_CHANNEL_ID:
+        import datetime as dt
+        job_queue = app.job_queue
+        if job_queue is not None:
+            job_queue.run_daily(
+                callback=kirim_laporan_harian,
+                time=dt.time(hour=0, minute=0, second=0),
+                name="laporan_harian"
+            )
 
     log.info("✅ Bot Motion Control berjalan...")
     app.run_polling(drop_pending_updates=True)

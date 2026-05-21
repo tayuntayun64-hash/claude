@@ -306,6 +306,11 @@ async def terima_bukti(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if datetime.now().timestamp() > expire_order:
         db["orders"][order_id]["status"] = "expired"
         save_db(db)
+        await audit_event(ctx, "⏰ Order Expired", [
+            f"📦 Paket   : {order['plan']}",
+            f"💵 Total   : {format_rupiah(order['total_bayar'])}",
+            f"🆔 Order ID: {order_id}",
+        ], update=update)
         await update.message.reply_text(
             "⏰ *Waktu pembayaran habis!*\n\n"
             "Order otomatis dibatalkan karena melebihi batas 3 menit.\n"
@@ -371,6 +376,30 @@ async def terima_bukti(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown",
             reply_markup=admin_keyboard(order_id)
         )
+
+    # Forward bukti ke history channel
+    if HISTORY_CHANNEL_ID:
+        try:
+            caption_hist = (
+                f"📸 Bukti Transfer\n"
+                f"👤 {user.first_name} (@{user.username or '-'})\n"
+                f"📦 {order['plan']}\n"
+                f"💵 {format_rupiah(order['total_bayar'])}"
+            )
+            if update.message.photo:
+                await ctx.bot.send_photo(
+                    chat_id=HISTORY_CHANNEL_ID,
+                    photo=update.message.photo[-1].file_id,
+                    caption=caption_hist
+                )
+            elif update.message.document:
+                await ctx.bot.send_document(
+                    chat_id=HISTORY_CHANNEL_ID,
+                    document=update.message.document.file_id,
+                    caption=caption_hist
+                )
+        except Exception:
+            pass
 
     ctx.user_data.clear()
     return ConversationHandler.END
@@ -697,10 +726,35 @@ async def terima_qris_baru(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 # ─────────────────────────────────────────────
+# STARTUP / SHUTDOWN NOTIFICATION
+# ─────────────────────────────────────────────
+async def on_startup(app):
+    if not HISTORY_CHANNEL_ID:
+        return
+    try:
+        await app.bot.send_message(
+            chat_id=HISTORY_CHANNEL_ID,
+            text=f"🟢 NS Store Bot aktif — {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}"
+        )
+    except Exception as e:
+        logging.warning("startup notif gagal: %s", e)
+
+async def on_shutdown(app):
+    if not HISTORY_CHANNEL_ID:
+        return
+    try:
+        await app.bot.send_message(
+            chat_id=HISTORY_CHANNEL_ID,
+            text=f"🔴 NS Store Bot berhenti — {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}"
+        )
+    except Exception:
+        pass
+
+# ─────────────────────────────────────────────
 # MAIN
 # ─────────────────────────────────────────────
 def main():
-    app = Application.builder().token(BOT_TOKEN).build()
+    app = Application.builder().token(BOT_TOKEN).post_init(on_startup).post_stop(on_shutdown).build()
 
     conv_order = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^📦 Pilih Plan$"), pilih_plan)],
