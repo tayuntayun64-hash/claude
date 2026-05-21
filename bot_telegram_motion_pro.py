@@ -142,6 +142,10 @@ def log_generate(user_id: int, username: str, resolusi: str):
     })
     save_json(GENERATE_LOG_FILE, logs)
 
+def _esc(text: str) -> str:
+    """Escape karakter Markdown spesial di konten dinamis."""
+    return str(text).replace("_", "\\_").replace("*", "\\*").replace("`", "\\`")
+
 def get_laporan(tanggal: str = None) -> str:
     """Buat laporan generate per tanggal"""
     logs = load_json(GENERATE_LOG_FILE, [])
@@ -166,10 +170,10 @@ def get_laporan(tanggal: str = None) -> str:
     # Per user
     user_count = {}
     for l in logs_filter:
-        key = f"{l.get('username')} ({l.get('user_id')})"
+        key = f"{_esc(l.get('username', '-'))} ({l.get('user_id', '-')})"
         user_count[key] = user_count.get(key, 0) + 1
 
-    per_user = "\n".join([f"  • {u}: {c}x" for u, c in sorted(user_count.items(), key=lambda x: -x[1])])
+    per_user = "\n".join([f"  \u2022 {u}: {c}x" for u, c in sorted(user_count.items(), key=lambda x: -x[1])])
 
     # Per tanggal (kalau laporan semua)
     if not tanggal:
