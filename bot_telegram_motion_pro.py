@@ -1298,11 +1298,14 @@ async def _do_genkey(message, durasi: str):
 
     plan     = plan_map[durasi]
     label    = label_map[durasi]
-    kode     = "NS-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=10))
     expire_ts = (datetime.now().timestamp()) + (int(durasi) * 24 * 3600)
     expire_str = datetime.fromtimestamp(expire_ts).strftime("%d/%m/%Y %H:%M")
 
     keys = get_keys()
+    while True:
+        kode = "NS-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=10))
+        if kode not in keys:
+            break
     keys[kode] = {
         "plan":      plan,
         "expire_ts": expire_ts,
